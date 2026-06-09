@@ -35,6 +35,7 @@ public static partial class SettingsUi
         // Auto-Use
         AutoUse_RemoveStellar,
         AutoUse_StartOnMoon,
+        AutoUse_ProcessRetainers,
 
         // Post Mission Settings
         Post_GoldRemover,

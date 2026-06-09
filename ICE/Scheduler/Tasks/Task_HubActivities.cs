@@ -15,6 +15,7 @@ namespace ICE.Scheduler
         public static bool CosmoBuy = false;
         public static bool CanGamba = false;
         public static bool CanBuyDrones = false;
+        public static bool ProcessRetainers = false;
         private static Vector3 craftingSpot = Vector3.Zero;
 
         public static void Enqueue()
@@ -51,6 +52,10 @@ namespace ICE.Scheduler
             {
                 P.TaskManager.Enqueue(() => IceLogging.Info("Starting the drone buying", "Task_HubActivities"));
                 Task_ArtifactSearch.EnqueueBuy();
+            }
+            if (ProcessRetainers)
+            {
+                Task_Retainer.Enqueue();
             }
             P.TaskManager.EnqueueMulti
             (
@@ -99,6 +104,7 @@ namespace ICE.Scheduler
             CosmoBuy = false;
             CanGamba = false;
             CanBuyDrones = false;
+            ProcessRetainers = false;
             CosmicHelper.Task_UpdateRelicMissionInfo();
 
             return true;

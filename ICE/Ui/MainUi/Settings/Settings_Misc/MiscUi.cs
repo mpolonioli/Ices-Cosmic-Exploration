@@ -60,6 +60,29 @@ public static partial class SettingsUi
         }
     };
 
+    private static readonly SettingEntry AutoUse_ProcessRetainers = new()
+    {
+        Label = "Process retainers when ventures complete",
+        Category = AutoUseCategory,
+        Keywords = new[] { "Retainer", "Venture", "Summoning Bell", "AutoRetainer", "Hub" },
+        Draw = () =>
+        {
+            var processRetainers = C.ProcessRetainers;
+            if (ImGui.Checkbox("Process retainers when ventures complete", ref processRetainers))
+            {
+                C.ProcessRetainers = processRetainers;
+                C.Save();
+            }
+
+            ImGui.SameLine();
+            ImGuiEx.IconWithTooltip(FontAwesomeIcon.QuestionCircle,
+                "When between missions and one or more retainer ventures have completed, ICE will return\n" +
+                "to the hub, walk to the summoning bell, and open it as a hub activity.\n" +
+                "AutoRetainer must be installed and configured to actually process the retainers and close the bell;\n" +
+                "ICE only gets the bell open and waits for AutoRetainer to finish.");
+        }
+    };
+
     #endregion
 
     #region Post Mission Settings

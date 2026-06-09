@@ -21,7 +21,8 @@ internal static class NpcData // Renamed the class to avoid conflict
         Relic,
         Gamba,
         Drone,
-        RedAlert
+        RedAlert,
+        SummonerBell
     }
 
     public class NPCInfo // Keep this class for the dictionary
@@ -71,6 +72,13 @@ internal static class NpcData // Renamed the class to avoid conflict
                 Location_Npc = new(16.74f, 1.71f, -3.86f),
                 Location_Circle = new(15.28f, 1.64f, -3.83f),
 
+            },
+            [NpcType.SummonerBell] = new NPCInfo // Summoning Bell
+            {
+                NpcId = 2014985,
+                Name = "Summoning Bell",
+                Location_Npc = new Vector3(10.53f, 1.61f, 17.29f),
+                Location_Circle = new Vector3(10.53f, 1.61f, 17.29f),
             }
         },
         [1291] = new Dictionary<NpcType, NPCInfo> // phaenna
@@ -109,6 +117,13 @@ internal static class NpcData // Renamed the class to avoid conflict
                 Name = "Lefleda",
                 Location_Npc = new(343.89f, 52.64f, -443.47f),
                 Location_Circle = new(343.46f, 52.64f, -441.80f),
+            },
+            [NpcType.SummonerBell] = new NPCInfo // Summoning Bell
+            {
+                NpcId = 2000441,
+                Name = "Summoning Bell",
+                Location_Npc = new Vector3(358.02f, 52.62f, -409.64f),
+                Location_Circle = new Vector3(358.02f, 52.62f, -409.64f),
             }
         },
         [1310] = new Dictionary<NpcType, NPCInfo> // Oizys
@@ -154,6 +169,13 @@ internal static class NpcData // Renamed the class to avoid conflict
                 Name = "Lefleda",
                 Location_Npc = new(-155.02f, 0.50f, 144.58f),
                 Location_Circle = new(-156.91f, 0.50f, 143.07f),
+            },
+            [NpcType.SummonerBell] = new NPCInfo // Summoning Bell
+            {
+                NpcId = 2000441,
+                Name = "Summoning Bell",
+                Location_Npc = new Vector3(-197.29f, 0.50f, 157.68f),
+                Location_Circle = new Vector3(-197.29f, 0.50f, 157.68f),
             }
         },
         [1319] = new Dictionary<NpcType, NPCInfo> // Auxesia
@@ -199,6 +221,13 @@ internal static class NpcData // Renamed the class to avoid conflict
                 Name = "Lefleda",
                 Location_Npc = new(280.41f, 205.64f, 352.49f),
                 Location_Circle = new(280.47f, 205.64f, 354.54f),
+            },
+            [NpcType.SummonerBell] = new NPCInfo // Summoning Bell
+            {
+                NpcId = 2000441,
+                Name = "Summoning Bell",
+                Location_Npc = new Vector3(312.75f, 205.64f, 371.76f),
+                Location_Circle = new Vector3(312.75f, 205.64f, 371.76f),
             }
         },
     };
