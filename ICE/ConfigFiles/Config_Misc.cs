@@ -30,6 +30,7 @@ public partial class Config
 
     public bool UseHubReturn { get; set; } = true;
     public bool UseAethernet { get; set; } = true;
+    public bool ProcessRetainers { get; set; } = false;
     public float HubReturn_Distance { get; set; } = 75f;
     public bool UseRedAlertNpc { get; set; } = false;
     public bool HideRewardWindow { get; set; } = true;

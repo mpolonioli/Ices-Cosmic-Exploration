@@ -534,6 +534,7 @@ namespace ICE.Scheduler.Tasks
             bool BuyItems = false;
             bool RepairVendor = false;
             bool TurninRelic = false;
+            bool ProcessRetainers = false;
 
             bool repairSelfGear = PlayerHelper.NeedsRepair(Char_Info.RepairPercent);
             bool repairAllGear = PlayerHelper.AnyNeedsRepair(Char_Info.RepairPercent) && Char_Info.RepairAllGear;
@@ -643,19 +644,27 @@ namespace ICE.Scheduler.Tasks
                 }
             }
 
-            if (BuyDrones || GambaWheel || BuyItems || RepairVendor || TurninRelic)
+            if (C.ProcessRetainers && Utils.HasPlugin("AutoRetainer"))
+            {
+                ProcessRetainers = RetainerHelper.AnyVentureComplete();
+                IceLogging.Verbose($"Process retainers? {ProcessRetainers}", tag);
+            }
+
+            if (BuyDrones || GambaWheel || BuyItems || RepairVendor || TurninRelic || ProcessRetainers)
             {
                 IceLogging.Info("We have some reason to return back to the base so... we're doing so.\n" +
                                   $"Can Buy Drones: {BuyDrones}\n" +
                                   $"Gamba Wheel: {GambaWheel}\n" +
                                   $"Buying Cosmocredit/Mount Items: {BuyItems}\n" +
                                   $"Repair At Vendor: {RepairVendor}\n" +
-                                  $"Turnin Relic: {TurninRelic}", tag);
+                                  $"Turnin Relic: {TurninRelic}\n" +
+                                  $"Process Retainers: {ProcessRetainers}", tag);
                 Task_HubActivities.CanBuyDrones = BuyDrones;
                 Task_HubActivities.CanGamba = GambaWheel;
                 Task_HubActivities.CosmoBuy = BuyItems;
                 Task_HubActivities.RepairNpc = RepairVendor;
                 Task_HubActivities.RelicTurnin = TurninRelic;
+                Task_HubActivities.ProcessRetainers = ProcessRetainers;
                 SchedulerMain.State = IceState.HubReturn;
             }
             else

@@ -203,6 +203,19 @@ namespace ICE.Ui.MainUi.Settings
                                    "If you are, it will automatically start as if you had pressed the start button yourself\n" +
                                    "Really useful if you have a tool to auto-log you in/if you just want to enter the moon and go\n" +
                                    "This will ONLY run upon first entry.");
+
+            bool processRetainers = C.ProcessRetainers;
+            if (ImGui.Checkbox("Process retainers when ventures complete", ref processRetainers))
+            {
+                C.ProcessRetainers = processRetainers;
+                C.Save();
+            }
+            ImGui.SameLine();
+            ImGuiEx.IconWithTooltip(FontAwesomeIcon.QuestionCircle,
+                                   "When between missions and one or more retainer ventures have completed, ICE will return\n" +
+                                   "to the hub, walk to the summoning bell, and open it as a hub activity.\n" +
+                                   "AutoRetainer must be installed and configured to actually process the retainers and close the bell;\n" +
+                                   "ICE only gets the bell open and waits for AutoRetainer to finish.");
             ImGui.Dummy(Vector2.Zero);
         }
         private static void GoldMissionRemover()
