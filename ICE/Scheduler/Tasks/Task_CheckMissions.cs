@@ -308,7 +308,13 @@ namespace ICE.Scheduler.Tasks
                 }
             }
 
-            if (MissionLibrary.All(x => x.Value.Count == 0))
+            // In Standard mode the library above only covers the current SelectedJob. Another selected
+            // job may still have enabled missions (any type), which CheckGlobalPriority can pick cross-job —
+            // so don't go Idle just because the current job's library came up empty.
+            bool standardCrossJobAvailable = modeSelected == ModeSelect.Standard
+                && C.JobPrio.Any(job => CosmicHelper.SheetMissionDict.Keys.Any(id => GlobalEligible(id, job)));
+
+            if (MissionLibrary.All(x => x.Value.Count == 0) && !standardCrossJobAvailable)
             {
                 if (modeSelected == ModeSelect.RelicMode && C.XPRelicOnlyEnabled)
                 {
@@ -401,6 +407,22 @@ namespace ICE.Scheduler.Tasks
             if (GenericHelpers.TryGetAddonMaster<WKSMission>("WKSMission", out var x) && x.IsAddonReady
                 || CosmicHandler.CanQueryMissionsWithoutUi())
             {
+                // Standard mode does a single cross-job global pick spanning ALL mission types
+                // (Critical/Provisional/Standard/Tool Mastery/Drone) in C.MissionTypePrio order, so it
+                // bypasses the per-type single-job loop below.
+                if (Mission_Settings.Mode == ModeSelect.Standard)
+                {
+                    // Drone search is a side activity (no-op if no box/marker); keep it ahead of the
+                    // mission pick like the legacy default ordering.
+                    if (C.MissionTypePrio.Contains(MissionTypes.DroneSearch) && C.Cosmodrone_Run
+                        && CosmicMoonRegistry.TryGetMoon(Player.Territory.RowId, out var droneHub) && droneHub.HasCosmodrome)
+                    {
+                        P.TaskManager.Enqueue(() => Task_ArtifactSearch.RefreshMapInfo(), "Inserting Drone Task");
+                    }
+                    P.TaskManager.Enqueue(() => CheckGlobalPriority(), "Global cross-job priority selection");
+                }
+                else
+                {
                 foreach (var type in C.MissionTypePrio)
                 {
                     switch (type)
@@ -466,15 +488,6 @@ namespace ICE.Scheduler.Tasks
                                     }
                                 }
                                 P.TaskManager.Enqueue(() => CheckMissions(basicMissions, type, Mission_Settings.SelectedJob));
-                                /*
-                                foreach (var job in C.JobPrio)
-                                {
-                                    if (job == Mission_Settings.SelectedJob)
-                                        continue;
-                                    else
-                                        P.TaskManager.Enqueue(() => CheckMissions(basicMissions, type, job));
-                                }
-                                */
                                 break;
                             }
                             else
@@ -522,12 +535,266 @@ namespace ICE.Scheduler.Tasks
                     P.TaskManager.Enqueue(() => CheckMissions(MissionLibrary[MissionKind.Master], MissionTypes.ToolMastery), "Checking Tool Mastery tab for missions");
                 }
 
+                // Gold mode still uses the single-job CheckMissions path, so it keeps the simple
+                // "switch jobs only when the current one has nothing grabbable" fallback.
+                if (Mission_Settings.Mode == ModeSelect.MissionGoldMode)
+                    P.TaskManager.Enqueue(() => TryJobRotation(), "Rotate to another job with an available mission");
+                }
+
                 P.TaskManager.Enqueue(() => FindReroll(), "Find mission to reroll for");
             }
             else
             {
                 ReOpenMissionUi(tag);
             }
+            return true;
+        }
+        // Standard/Gold basic-tab eligibility for a given job. Kept in lockstep with the Standard/Gold
+        // branches of RefreshMissionLibrary so the job-rotation probe matches what would be grabbed.
+        private static bool QualifiesStandardBasic(uint missionId, uint job)
+        {
+            if (!CosmicHelper.SheetMissionDict.TryGetValue(missionId, out var m))
+                return false;
+            if (m.TerritoryId != Player.Territory.RowId)
+                return false;
+            if (!C.MissionConfig.TryGetValue(missionId, out var config) || !config.Enabled)
+                return false;
+            // Provisional and Critical live on their own tabs; only basic missions are probed here.
+            if (m.IsProvisional || m.Attributes.HasFlag(MissionAttributes.Critical))
+                return false;
+            if (!m.Jobs.Contains(job))
+                return false;
+
+            var jobLevel = Math.Min(Player.GetLevel((Job)m.Jobs.First()), Player.GetLevel((Job)m.Jobs.Last()));
+            if (jobLevel < m.Level)
+                return false;
+
+            if (Mission_Settings.Mode == ModeSelect.MissionGoldMode && MissionGolded(missionId))
+                return false;
+
+            return true;
+        }
+        // Probes each job in priority order (other than the current one) for an enabled basic mission
+        // that is currently on its board. Returns true and leaves the board on that job if found.
+        private static bool TryRotateToJobWithAvailableMission(out uint chosenJob)
+        {
+            chosenJob = 0;
+            var startJob = Mission_Settings.SelectedJob;
+
+            foreach (var job in C.JobPrio)
+            {
+                if (job == startJob)
+                    continue;
+
+                var qualifying = CosmicHelper.SheetMissionDict.Keys
+                    .Where(id => QualifiesStandardBasic(id, job))
+                    .ToList();
+
+                if (qualifying.Count == 0)
+                    continue;
+
+                if (!CorrectJobTab(job, 0))
+                    continue;
+
+                var available = CosmicHandler.Basic_AvailableMissions();
+                if (qualifying.Any(id => available.Contains(id)))
+                {
+                    chosenJob = job;
+                    return true;
+                }
+            }
+
+            // Restore the board to the job we started on so the existing reroll path is unaffected.
+            CorrectJobTab(startJob, 0);
+            return false;
+        }
+        private static bool? TryJobRotation()
+        {
+            string tag = "[Check Missions: Job Rotation]";
+
+            // Only relevant for the basic-mission grind modes that pin to a single SelectedJob.
+            if (Mission_Settings.Mode is not (ModeSelect.Standard or ModeSelect.MissionGoldMode))
+                return true;
+
+            // A mission was already grabbed earlier in the queue; nothing to rotate.
+            if (CosmicHelper.CurrentLunarMission != 0)
+                return true;
+
+            if (!GenericHelpers.TryGetAddonMaster<WKSMission>("WKSMission", out var hud) || !hud.IsAddonReady)
+                return true;
+
+            if (TryRotateToJobWithAvailableMission(out var job))
+            {
+                IceLogging.Info($"Equipped job [{Mission_Settings.SelectedJob}] had no grabbable mission. " +
+                    $"Rotating SelectedJob to [{job}] which has an available mission, and restarting the grab.", tag);
+                Mission_Settings.SelectedJob = job;
+                P.TaskManager.Tasks.Clear();
+                return true;
+            }
+
+            // No other job has an immediately-available mission; fall through to the existing reroll.
+            return true;
+        }
+        // Standard-mode eligibility for the cross-job global pick: enabled + on this moon + matches the
+        // probed job + level-valid (Min of dual jobs, mirroring RefreshMissionLibrary). Mission-type
+        // agnostic — type filtering happens in GlobalMatchesType.
+        private static bool GlobalEligible(uint missionId, uint job)
+        {
+            if (!CosmicHelper.SheetMissionDict.TryGetValue(missionId, out var m))
+                return false;
+            if (m.TerritoryId != Player.Territory.RowId)
+                return false;
+            if (!C.MissionConfig.TryGetValue(missionId, out var config) || !config.Enabled)
+                return false;
+            if (!m.Jobs.Contains(job))
+                return false;
+
+            var jobLevel = Math.Min(Player.GetLevel((Job)m.Jobs.First()), Player.GetLevel((Job)m.Jobs.Last()));
+            if (jobLevel < m.Level)
+                return false;
+
+            return true;
+        }
+        private static bool GlobalMatchesType(uint missionId, MissionTypes type)
+        {
+            var m = CosmicHelper.SheetMissionDict[missionId];
+            return type switch
+            {
+                MissionTypes.Critical => m.IsCritical,
+                MissionTypes.Provisional => m.IsProvisional,
+                MissionTypes.ToolMastery => m.IsMaster,
+                MissionTypes.Standard => !m.IsProvisional && !m.IsCritical && !m.IsMaster,
+                _ => false,
+            };
+        }
+        // Lower value = higher priority within a mission type. Standard orders by rank (EX->D);
+        // Provisional by the configured C.MissionPrio sub-type order; others have no sub-order.
+        private static int GlobalWithinTypeKey(uint missionId, MissionTypes type)
+        {
+            var m = CosmicHelper.SheetMissionDict[missionId];
+            switch (type)
+            {
+                case MissionTypes.Standard:
+                    return -(int)m.Rank; // EX(5) -> -5 wins over D(1) -> -1
+                case MissionTypes.Provisional:
+                {
+                    ProvisionalTypes sub = m.IsWeather ? ProvisionalTypes.ProvisionalWeather
+                        : m.IsTimed ? ProvisionalTypes.ProvisionalTimed
+                        : m.IsSequence ? ProvisionalTypes.ProvisionalSequential
+                        : ProvisionalTypes.ProvisionalWeather;
+                    int idx = C.MissionPrio.IndexOf(sub);
+                    return idx >= 0 ? idx : int.MaxValue - 1;
+                }
+                default:
+                    return 0;
+            }
+        }
+        // Standard-mode global pick: across ALL selected jobs and ALL mission types (in C.MissionTypePrio
+        // order), choose the single best available + enabled mission, switch SelectedJob to its job, and
+        // grab it. Mission-type priority is the outer loop; within a type, GlobalWithinTypeKey then JobPrio.
+        private static bool? CheckGlobalPriority()
+        {
+            string tag = "[Check Missions: Global Priority]";
+
+            if (Mission_Settings.Mode != ModeSelect.Standard)
+                return true;
+
+            // A mission was already grabbed earlier in the queue.
+            if (CosmicHelper.CurrentLunarMission != 0)
+                return true;
+
+            if (!GenericHelpers.TryGetAddonMaster<WKSMission>("WKSMission", out var hud) || !hud.IsAddonReady)
+            {
+                ReOpenMissionUi(tag);
+                return false;
+            }
+
+            var startJob = Mission_Settings.SelectedJob;
+
+            // Probe each selected job once and collect everything currently available on its board.
+            // Availability getters are per-job-tab, so we must switch tabs to read each job.
+            var availableByJob = new Dictionary<uint, HashSet<uint>>();
+            foreach (var job in C.JobPrio)
+            {
+                var eligible = CosmicHelper.SheetMissionDict.Keys.Where(id => GlobalEligible(id, job)).ToList();
+                if (eligible.Count == 0)
+                    continue;
+
+                bool hasMaster = eligible.Any(id => CosmicHelper.SheetMissionDict[id].IsMaster);
+                bool hasNonMaster = eligible.Any(id => !CosmicHelper.SheetMissionDict[id].IsMaster);
+
+                var set = new HashSet<uint>();
+                if (hasNonMaster && CorrectJobTab(job, 0))
+                {
+                    foreach (var id in CosmicHandler.Basic_AvailableMissions()) set.Add(id);
+                    foreach (var id in CosmicHandler.Provisional_AvailableMissions()) set.Add(id);
+                    foreach (var id in CosmicHandler.Critical_AvailableMissions()) set.Add(id);
+                }
+                if (hasMaster && CorrectJobTab(job, CosmicHandler.ToolMasteryTab))
+                {
+                    foreach (var id in CosmicHandler.Mastery_AvailableMissions()) set.Add(id);
+                }
+
+                if (set.Count > 0)
+                    availableByJob[job] = set;
+            }
+
+            if (availableByJob.Count == 0)
+            {
+                CorrectJobTab(startJob, 0);
+                return true;
+            }
+
+            // Walk mission types in priority order; first type with any available+enabled mission wins.
+            // Tool Mastery is also checked even if the user removed it from MissionTypePrio (parity with
+            // the legacy "always check mastery" safety net).
+            var typeOrder = new List<MissionTypes>(C.MissionTypePrio);
+            if (!typeOrder.Contains(MissionTypes.ToolMastery))
+                typeOrder.Add(MissionTypes.ToolMastery);
+
+            foreach (var type in typeOrder)
+            {
+                // Drone search is handled separately in CheckTabs (it's a side activity, not a mission grab).
+                if (type == MissionTypes.DroneSearch)
+                    continue;
+
+                uint bestMission = 0, bestJob = 0;
+                int bestWithin = int.MaxValue, bestJobPrio = int.MaxValue;
+
+                foreach (var kvp in availableByJob.OrderBy(k => C.JobPrio.IndexOf(k.Key)))
+                {
+                    var job = kvp.Key;
+                    int jobPrio = C.JobPrio.IndexOf(job);
+                    foreach (var id in kvp.Value)
+                    {
+                        if (!GlobalEligible(id, job) || !GlobalMatchesType(id, type))
+                            continue;
+
+                        int within = GlobalWithinTypeKey(id, type);
+                        if (within < bestWithin || (within == bestWithin && jobPrio < bestJobPrio))
+                        {
+                            bestWithin = within;
+                            bestMission = id;
+                            bestJob = job;
+                            bestJobPrio = jobPrio;
+                        }
+                    }
+                }
+
+                if (bestMission != 0)
+                {
+                    byte catTab = CosmicHelper.SheetMissionDict[bestMission].IsMaster ? CosmicHandler.ToolMasteryTab : (byte)0;
+                    IceLogging.Info($"Global priority pick: type [{type}], mission [{bestMission}] on job [{bestJob}]. " +
+                        $"Was on job [{startJob}].", tag);
+                    Mission_Settings.SelectedJob = bestJob;
+                    CorrectJobTab(bestJob, catTab);
+                    Insert_GrabMissionTask(bestMission);
+                    return true;
+                }
+            }
+
+            // Nothing grabbable on any job right now; restore the board so FindReroll targets the original job.
+            CorrectJobTab(startJob, 0);
             return true;
         }
         private static bool? CheckMissions(List<uint> missionList, MissionTypes type, uint Goldjob = 0)
