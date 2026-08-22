@@ -173,6 +173,10 @@ namespace ICE.Scheduler.Tasks
                 $"Current TerritoryID: {playerTerritory}");
 
             var modeSelected = Mission_Settings.Mode;
+
+            if (modeSelected == ModeSelect.MissionGoldMode)
+                RefreshGoldSequencePrereqs();
+
             foreach (var mission in CosmicHelper.SheetMissionDict)
             {
                 if (mission.Value.TerritoryId != Player.Territory.RowId)
@@ -265,40 +269,33 @@ namespace ICE.Scheduler.Tasks
                     }
                     else if (modeSelected == ModeSelect.MissionGoldMode)
                     {
+                        // Gold completion spans every class in JobPrio - not just the equipped one - since the
+                        // goal is to gold the whole board and we're free to swap to whatever job a mission wants.
                         if (MissionGolded(missionId))
                             continue;
 
-                        if (mission.Value.Attributes.HasFlag(MissionAttributes.Critical))
+                        if (!GoldJobAllowed(mission.Value))
+                            continue;
+
+                        if (!LevelRequirementMet(mission.Value))
+                            continue;
+
+                        if (provisional)
                         {
-                            if (C.GrindOffClassRedAlert)
-                                MissionLibrary[LibraryInfo(mission)].Add(missionId);
-                            else if (mission.Value.Jobs.Contains(Mission_Settings.SelectedJob))
-                                MissionLibrary[LibraryInfo(mission)].Add(missionId);
-                        }
-                        else if (provisional)
-                        {
-                            if (C.GrindAllProvisionals || mission.Value.Jobs.Contains(Mission_Settings.SelectedJob))
+                            // Sequence chains only offer their later steps once the earlier ones are done,
+                            // so the whole chain gets pulled in even where individual steps are already gold.
+                            foreach (var seqMissionId in mission.Value.SequenceMissions_Previous.Concat(mission.Value.SequenceMissions_Next))
                             {
-                                if (mission.Value.SequenceMissions_Previous.Count() != 0 || mission.Value.SequenceMissions_Next.Count() != 0)
-                                {
-                                    foreach (var prevSeqMission in mission.Value.SequenceMissions_Previous)
-                                    {
-                                        var seqMission = CosmicHelper.SheetMissionDict.Where(x => x.Key == prevSeqMission).FirstOrDefault();
-                                        if (!MissionLibrary[LibraryInfo(seqMission)].Contains(prevSeqMission))
-                                            MissionLibrary[LibraryInfo(seqMission)].Add(prevSeqMission);
-                                    }
-                                    foreach (var nextSeqMission in mission.Value.SequenceMissions_Next)
-                                    {
-                                        var seqMission = CosmicHelper.SheetMissionDict.Where(x => x.Key == nextSeqMission).FirstOrDefault();
-                                        if (!MissionLibrary[LibraryInfo(seqMission)].Contains(nextSeqMission))
-                                            MissionLibrary[LibraryInfo(seqMission)].Add(nextSeqMission);
-                                    }
-                                }
-                                MissionLibrary[LibraryInfo(mission)].Add(missionId);
+                                if (!CosmicHelper.SheetMissionDict.TryGetValue(seqMissionId, out var seqInfo))
+                                    continue;
+
+                                var seqKind = LibraryInfo(new(seqMissionId, seqInfo));
+                                if (!MissionLibrary[seqKind].Contains(seqMissionId))
+                                    MissionLibrary[seqKind].Add(seqMissionId);
                             }
                         }
-                        else if (mission.Value.Jobs.Contains(Mission_Settings.SelectedJob))
-                            MissionLibrary[LibraryInfo(mission)].Add(missionId);
+
+                        MissionLibrary[LibraryInfo(mission)].Add(missionId);
                     }
                 }
                 else
@@ -312,7 +309,8 @@ namespace ICE.Scheduler.Tasks
             // job may still have enabled missions (any type), which CheckGlobalPriority can pick cross-job —
             // so don't go Idle just because the current job's library came up empty.
             bool standardCrossJobAvailable = modeSelected == ModeSelect.Standard
-                && C.JobPrio.Any(job => CosmicHelper.SheetMissionDict.Keys.Any(id => GlobalEligible(id, job)));
+                && ActiveJobPool().Any(job => CosmicHelper.SheetMissionDict.Keys.Any(id => GlobalEligible(id, job)));
+
 
             if (MissionLibrary.All(x => x.Value.Count == 0) && !standardCrossJobAvailable)
             {
@@ -345,7 +343,10 @@ namespace ICE.Scheduler.Tasks
                 foreach (var key in MissionLibrary.Keys.ToList())
                 {
                     MissionLibrary[key] = MissionLibrary[key]
-                        .OrderBy(x =>
+                        // Gold completion pushes the missions we already failed to gold to the back.
+                        .OrderBy(x => GoldDifficultyTier(x))
+                        .ThenBy(x => GoldAttemptPenalty(x))
+                        .ThenBy(x =>
                         {
                             var jobs = CosmicHelper.SheetMissionDict[x].Jobs;
                             var bestIndex = jobs
@@ -407,18 +408,21 @@ namespace ICE.Scheduler.Tasks
             if (GenericHelpers.TryGetAddonMaster<WKSMission>("WKSMission", out var x) && x.IsAddonReady
                 || CosmicHandler.CanQueryMissionsWithoutUi())
             {
-                // Standard mode does a single cross-job global pick spanning ALL mission types
-                // (Critical/Provisional/Standard/Tool Mastery/Drone) in C.MissionTypePrio order, so it
-                // bypasses the per-type single-job loop below.
-                if (Mission_Settings.Mode == ModeSelect.Standard)
+                // Standard and Gold Completion do a single cross-job global pick spanning ALL mission types
+                // (Critical/Provisional/Standard/Tool Mastery/Drone) in C.MissionTypePrio order, so they
+                // bypass the per-type single-job loop below.
+                if (Mission_Settings.Mode is ModeSelect.Standard or ModeSelect.MissionGoldMode)
                 {
                     // Drone search is a side activity (no-op if no box/marker); keep it ahead of the
-                    // mission pick like the legacy default ordering.
-                    if (C.MissionTypePrio.Contains(MissionTypes.DroneSearch) && C.Cosmodrone_Run
+                    // mission pick like the legacy default ordering - but never in the middle of a sequence
+                    // chain, where wandering off to a box costs us the follow-up step.
+                    if (!SequenceContinuationPending()
+                        && C.MissionTypePrio.Contains(MissionTypes.DroneSearch) && C.Cosmodrone_Run
                         && CosmicMoonRegistry.TryGetMoon(Player.Territory.RowId, out var droneHub) && droneHub.HasCosmodrome)
                     {
                         P.TaskManager.Enqueue(() => Task_ArtifactSearch.RefreshMapInfo(), "Inserting Drone Task");
                     }
+                    P.TaskManager.Enqueue(() => WaitForSequenceFollowUp(), "Waiting on a sequence follow-up");
                     P.TaskManager.Enqueue(() => CheckGlobalPriority(), "Global cross-job priority selection");
                 }
                 else
@@ -471,43 +475,21 @@ namespace ICE.Scheduler.Tasks
                         }
                         case MissionTypes.Standard:
                         {
-                            var mode = Mission_Settings.Mode;
-                            if (mode is ModeSelect.MissionGoldMode)
+                            List<uint> basicMissions = new();
+                            List<MissionKind> MissionRanks = new() { MissionKind.Ex, MissionKind.A, MissionKind.B, MissionKind.C, MissionKind.D };
+                            foreach (var rank in MissionRanks)
                             {
-                                List<uint> basicMissions = new();
-                                List<MissionKind> MissionRanks = new() { MissionKind.D, MissionKind.C, MissionKind.B, MissionKind.A, MissionKind.Ex };
-                                foreach (var rank in MissionRanks)
+                                if (MissionLibrary.TryGetValue(rank, out var missionList))
                                 {
-                                    if (MissionLibrary.TryGetValue(rank, out var missionList))
+                                    foreach (var mission in missionList)
                                     {
-                                        foreach (var mission in missionList)
-                                        {
-                                            if (!basicMissions.Contains(mission))
-                                                basicMissions.Add(mission);
-                                        }
+                                        if (!basicMissions.Contains(mission))
+                                            basicMissions.Add(mission);
                                     }
                                 }
-                                P.TaskManager.Enqueue(() => CheckMissions(basicMissions, type, Mission_Settings.SelectedJob));
-                                break;
                             }
-                            else
-                            {
-                                List<uint> basicMissions = new();
-                                List<MissionKind> MissionRanks = new() { MissionKind.Ex, MissionKind.A, MissionKind.B, MissionKind.C, MissionKind.D };
-                                foreach (var rank in MissionRanks)
-                                {
-                                    if (MissionLibrary.TryGetValue(rank, out var missionList))
-                                    {
-                                        foreach (var mission in missionList)
-                                        {
-                                            if (!basicMissions.Contains(mission))
-                                                basicMissions.Add(mission);
-                                        }
-                                    }
-                                }
-                                P.TaskManager.Enqueue(() => CheckMissions(basicMissions, type), "Checking Basic Mission tab for missions");
-                                break;
-                            }
+                            P.TaskManager.Enqueue(() => CheckMissions(basicMissions, type), "Checking Basic Mission tab for missions");
+                            break;
                         }
                         case MissionTypes.DroneSearch:
                         {
@@ -534,12 +516,10 @@ namespace ICE.Scheduler.Tasks
                 {
                     P.TaskManager.Enqueue(() => CheckMissions(MissionLibrary[MissionKind.Master], MissionTypes.ToolMastery), "Checking Tool Mastery tab for missions");
                 }
-
-                // Gold mode still uses the single-job CheckMissions path, so it keeps the simple
-                // "switch jobs only when the current one has nothing grabbable" fallback.
-                if (Mission_Settings.Mode == ModeSelect.MissionGoldMode)
-                    P.TaskManager.Enqueue(() => TryJobRotation(), "Rotate to another job with an available mission");
                 }
+
+                if (Mission_Settings.Mode == ModeSelect.MissionGoldMode)
+                    P.TaskManager.Enqueue(() => AlignGoldRerollJob(), "Picking which job to reroll on");
 
                 P.TaskManager.Enqueue(() => FindReroll(), "Find mission to reroll for");
             }
@@ -549,94 +529,9 @@ namespace ICE.Scheduler.Tasks
             }
             return true;
         }
-        // Standard/Gold basic-tab eligibility for a given job. Kept in lockstep with the Standard/Gold
-        // branches of RefreshMissionLibrary so the job-rotation probe matches what would be grabbed.
-        private static bool QualifiesStandardBasic(uint missionId, uint job)
-        {
-            if (!CosmicHelper.SheetMissionDict.TryGetValue(missionId, out var m))
-                return false;
-            if (m.TerritoryId != Player.Territory.RowId)
-                return false;
-            if (!C.MissionConfig.TryGetValue(missionId, out var config) || !config.Enabled)
-                return false;
-            // Provisional and Critical live on their own tabs; only basic missions are probed here.
-            if (m.IsProvisional || m.Attributes.HasFlag(MissionAttributes.Critical))
-                return false;
-            if (!m.Jobs.Contains(job))
-                return false;
-
-            var jobLevel = Math.Min(Player.GetLevel((Job)m.Jobs.First()), Player.GetLevel((Job)m.Jobs.Last()));
-            if (jobLevel < m.Level)
-                return false;
-
-            if (Mission_Settings.Mode == ModeSelect.MissionGoldMode && MissionGolded(missionId))
-                return false;
-
-            return true;
-        }
-        // Probes each job in priority order (other than the current one) for an enabled basic mission
-        // that is currently on its board. Returns true and leaves the board on that job if found.
-        private static bool TryRotateToJobWithAvailableMission(out uint chosenJob)
-        {
-            chosenJob = 0;
-            var startJob = Mission_Settings.SelectedJob;
-
-            foreach (var job in C.JobPrio)
-            {
-                if (job == startJob)
-                    continue;
-
-                var qualifying = CosmicHelper.SheetMissionDict.Keys
-                    .Where(id => QualifiesStandardBasic(id, job))
-                    .ToList();
-
-                if (qualifying.Count == 0)
-                    continue;
-
-                if (!CorrectJobTab(job, 0))
-                    continue;
-
-                var available = CosmicHandler.Basic_AvailableMissions();
-                if (qualifying.Any(id => available.Contains(id)))
-                {
-                    chosenJob = job;
-                    return true;
-                }
-            }
-
-            // Restore the board to the job we started on so the existing reroll path is unaffected.
-            CorrectJobTab(startJob, 0);
-            return false;
-        }
-        private static bool? TryJobRotation()
-        {
-            string tag = "[Check Missions: Job Rotation]";
-
-            // Only relevant for the basic-mission grind modes that pin to a single SelectedJob.
-            if (Mission_Settings.Mode is not (ModeSelect.Standard or ModeSelect.MissionGoldMode))
-                return true;
-
-            // A mission was already grabbed earlier in the queue; nothing to rotate.
-            if (CosmicHelper.CurrentLunarMission != 0)
-                return true;
-
-            if (!GenericHelpers.TryGetAddonMaster<WKSMission>("WKSMission", out var hud) || !hud.IsAddonReady)
-                return true;
-
-            if (TryRotateToJobWithAvailableMission(out var job))
-            {
-                IceLogging.Info($"Equipped job [{Mission_Settings.SelectedJob}] had no grabbable mission. " +
-                    $"Rotating SelectedJob to [{job}] which has an available mission, and restarting the grab.", tag);
-                Mission_Settings.SelectedJob = job;
-                P.TaskManager.Tasks.Clear();
-                return true;
-            }
-
-            // No other job has an immediately-available mission; fall through to the existing reroll.
-            return true;
-        }
-        // Standard-mode eligibility for the cross-job global pick: enabled + on this moon + matches the
-        // probed job + level-valid (Min of dual jobs, mirroring RefreshMissionLibrary). Mission-type
+        // Eligibility for the cross-job global pick: on this moon + matches the probed job + level-valid
+        // (Min of dual jobs, mirroring RefreshMissionLibrary). Standard mode additionally requires the
+        // mission to be enabled; Gold Completion instead requires it to still need a gold. Mission-type
         // agnostic — type filtering happens in GlobalMatchesType.
         private static bool GlobalEligible(uint missionId, uint job)
         {
@@ -644,13 +539,18 @@ namespace ICE.Scheduler.Tasks
                 return false;
             if (m.TerritoryId != Player.Territory.RowId)
                 return false;
-            if (!C.MissionConfig.TryGetValue(missionId, out var config) || !config.Enabled)
-                return false;
             if (!m.Jobs.Contains(job))
                 return false;
+            if (!LevelRequirementMet(m))
+                return false;
 
-            var jobLevel = Math.Min(Player.GetLevel((Job)m.Jobs.First()), Player.GetLevel((Job)m.Jobs.Last()));
-            if (jobLevel < m.Level)
+            if (Mission_Settings.Mode == ModeSelect.MissionGoldMode)
+            {
+                // Golded missions are only worth repeating when a chain we still need hangs off them.
+                return !MissionGolded(missionId) || GoldSequencePrereqs.Contains(missionId);
+            }
+
+            if (!C.MissionConfig.TryGetValue(missionId, out var config) || !config.Enabled)
                 return false;
 
             return true;
@@ -675,7 +575,11 @@ namespace ICE.Scheduler.Tasks
             switch (type)
             {
                 case MissionTypes.Standard:
-                    return -(int)m.Rank; // EX(5) -> -5 wins over D(1) -> -1
+                    // Gold Completion takes the cheapest rank first (D -> EX); everything else wants the
+                    // biggest payout first (EX -> D).
+                    return Mission_Settings.Mode == ModeSelect.MissionGoldMode
+                        ? (int)m.Rank
+                        : -(int)m.Rank; // EX(5) -> -5 wins over D(1) -> -1
                 case MissionTypes.Provisional:
                 {
                     ProvisionalTypes sub = m.IsWeather ? ProvisionalTypes.ProvisionalWeather
@@ -689,21 +593,26 @@ namespace ICE.Scheduler.Tasks
                     return 0;
             }
         }
-        // Standard-mode global pick: across ALL selected jobs and ALL mission types (in C.MissionTypePrio
-        // order), choose the single best available + enabled mission, switch SelectedJob to its job, and
-        // grab it. Mission-type priority is the outer loop; within a type, GlobalWithinTypeKey then JobPrio.
+        // Global pick for Standard and Gold Completion: across ALL jobs in C.JobPrio and ALL mission types
+        // (in C.MissionTypePrio order), choose the single best available mission, switch SelectedJob to its
+        // job, and grab it. Mission-type priority is the outer loop; within a type, GlobalWithinTypeKey then
+        // JobPrio. Gold Completion wraps that in a difficulty pass so missions already completed without a
+        // gold are only picked once nothing else on the board still needs one.
         private static bool? CheckGlobalPriority()
         {
             string tag = "[Check Missions: Global Priority]";
 
-            if (Mission_Settings.Mode != ModeSelect.Standard)
+            if (Mission_Settings.Mode is not (ModeSelect.Standard or ModeSelect.MissionGoldMode))
                 return true;
 
             // A mission was already grabbed earlier in the queue.
             if (CosmicHelper.CurrentLunarMission != 0)
                 return true;
 
-            if (!GenericHelpers.TryGetAddonMaster<WKSMission>("WKSMission", out var hud) || !hud.IsAddonReady)
+            // The mission agent can be read without the window being up (gold completion idles on the board
+            // that way), so only force the UI open when neither is available.
+            if (!CosmicHandler.CanQueryMissionsWithoutUi()
+                && (!GenericHelpers.TryGetAddonMaster<WKSMission>("WKSMission", out var hud) || !hud.IsAddonReady))
             {
                 ReOpenMissionUi(tag);
                 return false;
@@ -714,7 +623,7 @@ namespace ICE.Scheduler.Tasks
             // Probe each selected job once and collect everything currently available on its board.
             // Availability getters are per-job-tab, so we must switch tabs to read each job.
             var availableByJob = new Dictionary<uint, HashSet<uint>>();
-            foreach (var job in C.JobPrio)
+            foreach (var job in ActiveJobPool())
             {
                 var eligible = CosmicHelper.SheetMissionDict.Keys.Where(id => GlobalEligible(id, job)).ToList();
                 if (eligible.Count == 0)
@@ -752,44 +661,85 @@ namespace ICE.Scheduler.Tasks
             if (!typeOrder.Contains(MissionTypes.ToolMastery))
                 typeOrder.Add(MissionTypes.ToolMastery);
 
-            foreach (var type in typeOrder)
+            // Sequence chains come before everything else. A follow-up step is only on the board because we
+            // just cleared the step before it and it vanishes the moment we take something else, so the
+            // configured type/job/difficulty order doesn't get a say - we finish what we started.
+            var chainPick = availableByJob
+                .SelectMany(kvp => kvp.Value.Select(id => (Mission: id, Job: kvp.Key)))
+                .Where(c => GlobalEligible(c.Mission, c.Job) && IsLiveSequenceFollowUp(c.Mission))
+                // Deepest step first, so a chain already underway finishes before another one starts.
+                .OrderByDescending(c => CosmicHelper.SheetMissionDict[c.Mission].SequenceMissions_Previous.Count)
+                .ThenBy(c => C.JobPrio.IndexOf(c.Job))
+                .FirstOrDefault();
+
+            if (chainPick.Mission != 0)
             {
-                // Drone search is handled separately in CheckTabs (it's a side activity, not a mission grab).
-                if (type == MissionTypes.DroneSearch)
-                    continue;
+                IceLogging.Info($"Sequence chain: taking step [{chainPick.Mission}] on job [{chainPick.Job}] ahead of " +
+                    "the normal priority order - its earlier steps are all gold and the chain still needs one.", tag);
+                Mission_Settings.SelectedJob = chainPick.Job;
+                CorrectJobTab(chainPick.Job, 0);
+                Insert_GrabMissionTask(chainPick.Mission);
+                return true;
+            }
 
-                uint bestMission = 0, bestJob = 0;
-                int bestWithin = int.MaxValue, bestJobPrio = int.MaxValue;
+            // Difficulty tiers only exist for Gold Completion: tier 0 is everything that has never been
+            // completed below gold, tier 1 the ones we've already failed to gold. While any tier 0 standard
+            // mission is still out there we keep rerolling for it rather than accepting a tier 1 one, so the
+            // hard missions genuinely come last instead of just losing ties. Outside gold mode every mission
+            // is tier 0, so the extra pass costs nothing.
+            var difficultyTiers = GoldDeprioritisingHardMissions() && GoldEasyMissionsRemain()
+                ? new[] { 0 }
+                : new[] { 0, 1 };
 
-                foreach (var kvp in availableByJob.OrderBy(k => C.JobPrio.IndexOf(k.Key)))
+            foreach (var tier in difficultyTiers)
+            {
+                foreach (var type in typeOrder)
                 {
-                    var job = kvp.Key;
-                    int jobPrio = C.JobPrio.IndexOf(job);
-                    foreach (var id in kvp.Value)
-                    {
-                        if (!GlobalEligible(id, job) || !GlobalMatchesType(id, type))
-                            continue;
+                    // Drone search is handled separately in CheckTabs (it's a side activity, not a mission grab).
+                    if (type == MissionTypes.DroneSearch)
+                        continue;
 
-                        int within = GlobalWithinTypeKey(id, type);
-                        if (within < bestWithin || (within == bestWithin && jobPrio < bestJobPrio))
+                    uint bestMission = 0, bestJob = 0;
+                    int bestWithin = int.MaxValue, bestPenalty = int.MaxValue, bestJobPrio = int.MaxValue;
+
+                    foreach (var kvp in availableByJob.OrderBy(k => C.JobPrio.IndexOf(k.Key)))
+                    {
+                        var job = kvp.Key;
+                        int jobPrio = C.JobPrio.IndexOf(job);
+                        foreach (var id in kvp.Value)
                         {
-                            bestWithin = within;
-                            bestMission = id;
-                            bestJob = job;
-                            bestJobPrio = jobPrio;
+                            if (!GlobalEligible(id, job) || !GlobalMatchesType(id, type))
+                                continue;
+                            if (GoldDifficultyTier(id) != tier)
+                                continue;
+
+                            int within = GlobalWithinTypeKey(id, type);
+                            int penalty = GoldAttemptPenalty(id);
+                            if (within < bestWithin
+                                || (within == bestWithin && penalty < bestPenalty)
+                                || (within == bestWithin && penalty == bestPenalty && jobPrio < bestJobPrio))
+                            {
+                                bestWithin = within;
+                                bestPenalty = penalty;
+                                bestMission = id;
+                                bestJob = job;
+                                bestJobPrio = jobPrio;
+                            }
                         }
                     }
-                }
 
-                if (bestMission != 0)
-                {
-                    byte catTab = CosmicHelper.SheetMissionDict[bestMission].IsMaster ? CosmicHandler.ToolMasteryTab : (byte)0;
-                    IceLogging.Info($"Global priority pick: type [{type}], mission [{bestMission}] on job [{bestJob}]. " +
-                        $"Was on job [{startJob}].", tag);
-                    Mission_Settings.SelectedJob = bestJob;
-                    CorrectJobTab(bestJob, catTab);
-                    Insert_GrabMissionTask(bestMission);
-                    return true;
+                    if (bestMission != 0)
+                    {
+                        byte catTab = CosmicHelper.SheetMissionDict[bestMission].IsMaster ? CosmicHandler.ToolMasteryTab : (byte)0;
+                        IceLogging.Info($"Global priority pick: type [{type}], mission [{bestMission}] on job [{bestJob}]" +
+                            $"{(tier > 0 ? " (previously completed without gold)" : string.Empty)}" +
+                            $"{SequenceNote(bestMission)}. " +
+                            $"Was on job [{startJob}].", tag);
+                        Mission_Settings.SelectedJob = bestJob;
+                        CorrectJobTab(bestJob, catTab);
+                        Insert_GrabMissionTask(bestMission);
+                        return true;
+                    }
                 }
             }
 
@@ -797,7 +747,7 @@ namespace ICE.Scheduler.Tasks
             CorrectJobTab(startJob, 0);
             return true;
         }
-        private static bool? CheckMissions(List<uint> missionList, MissionTypes type, uint Goldjob = 0)
+        private static bool? CheckMissions(List<uint> missionList, MissionTypes type)
         {
             string tag = "[Check Missions: Queue]";
             void LogInfo(uint missionId)
@@ -823,7 +773,7 @@ namespace ICE.Scheduler.Tasks
                 var masteryMissions = CosmicHandler.Mastery_AvailableMissions();
                 var mode = Mission_Settings.Mode;
 
-                var job = Goldjob != 0 ? Goldjob : Mission_Settings.SelectedJob;
+                var job = Mission_Settings.SelectedJob;
 
                 if (CorrectJobTab(job))
                 {
@@ -1525,10 +1475,10 @@ namespace ICE.Scheduler.Tasks
                             }
                         }
 
-                        bool CheckARanks = (MissionLibrary[MissionKind.Ex].Count > 0 || MissionLibrary[MissionKind.A].Count > 0) && (AExRank.Count > 0 || ARank.Count > 0);
-                        bool CheckBRanks = (MissionLibrary[MissionKind.B].Count > 0 && BRank.Count > 0);
-                        bool CheckCRanks = (MissionLibrary[MissionKind.C].Count > 0 && CRank.Count > 0);
-                        bool CheckDRanks = (MissionLibrary[MissionKind.D].Count > 0 && DRank.Count > 0);
+                        bool CheckARanks = (LibraryRankCount(MissionKind.Ex) > 0 || LibraryRankCount(MissionKind.A) > 0) && (AExRank.Count > 0 || ARank.Count > 0);
+                        bool CheckBRanks = (LibraryRankCount(MissionKind.B) > 0 && BRank.Count > 0);
+                        bool CheckCRanks = (LibraryRankCount(MissionKind.C) > 0 && CRank.Count > 0);
+                        bool CheckDRanks = (LibraryRankCount(MissionKind.D) > 0 && DRank.Count > 0);
 
                         IceLogging.Verbose($"[Ex] = {AExRank.Count()}\n" +
                             $"[A] = {ARank.Count()}\n" +
@@ -1540,7 +1490,7 @@ namespace ICE.Scheduler.Tasks
                         var enabledCount = 0;
                         foreach (var rank in ranks)
                         {
-                            enabledCount += MissionLibrary[rank].Count();
+                            enabledCount += LibraryRankCount(rank);
                         }
 
                         if (enabledCount == 0)
@@ -1769,6 +1719,406 @@ namespace ICE.Scheduler.Tasks
             var isGolded = managerPtr->IsMissionGolded(id);
 
             return isGolded;
+        }
+
+        /// <summary>A mission we have finished before, but never at gold - the hard ones.</summary>
+        private static unsafe bool MissionCompletedWithoutGold(uint id)
+        {
+            var managerPtr = WKSManager.Instance();
+            if (managerPtr == null) return false;
+
+            if (managerPtr->IsMissionGolded(id))
+                return false;
+
+            if (managerPtr->IsMissionCompleted(id))
+                return true;
+
+            // Fall back on our own turn-in history for missions the game no longer flags (or that were
+            // run before the completion flag was tracked).
+            return C.MissionConfig.TryGetValue(id, out var config)
+                && config.GoldCompletions == 0
+                && config.TotalCompletions > 0;
+        }
+
+        /// <summary>Missions whose level requirement the player meets (Min of both jobs on dual-job missions).</summary>
+        private static bool LevelRequirementMet(CosmicHelper.CosmicInfo mission)
+        {
+            if (mission.Jobs.Count == 0)
+                return false;
+
+            var jobLevel = Math.Min(Player.GetLevel((Job)mission.Jobs.First()), Player.GetLevel((Job)mission.Jobs.Last()));
+            return jobLevel >= mission.Level;
+        }
+
+        // - - - Gold Completion helpers - - - //
+
+        /// <summary>
+        /// Gold Completion works across every class in the configured job priority, so a mission counts as
+        /// long as one of its jobs is in that list. Off-class criticals/provisionals stay behind their
+        /// existing toggles for jobs that aren't in the list at all.
+        /// </summary>
+        private static bool GoldJobAllowed(CosmicHelper.CosmicInfo mission)
+        {
+            var jobPool = ActiveJobPool();
+            if (mission.Jobs.Any(job => jobPool.Contains(job)))
+                return true;
+
+            if (mission.IsCritical)
+                return C.GrindOffClassRedAlert;
+
+            if (mission.IsProvisional)
+                return C.GrindAllProvisionals;
+
+            return false;
+        }
+
+        private static List<uint> _jobPoolCache = new();
+        private static long _jobPoolCacheStamp = 0;
+
+        /// <summary>
+        /// Jobs the cross-job pick is allowed to roam over. An agenda entry pins its goal to a single class
+        /// ("gold every mission on WVR"), so a mode running under the agenda stays on that job; a standalone
+        /// run covers every class in the configured job priority order that we can actually equip.
+        /// </summary>
+        private static List<uint> ActiveJobPool()
+        {
+            if (C.SelectedMode == ModeSelect.AgendaMode)
+                return new List<uint> { Mission_Settings.SelectedJob };
+
+            // Walking every gearset per mission would be wasteful, and gearsets barely ever change mid-run.
+            var now = Environment.TickCount64;
+            if (_jobPoolCacheStamp != 0 && now - _jobPoolCacheStamp < 1000)
+                return _jobPoolCache;
+
+            var usable = C.JobPrio.Where(job => GearsetHandler.HasGearset((Job)job)).ToList();
+
+            // Something's off with the gearset read - better to try every job than to grind to a halt.
+            _jobPoolCache = usable.Count > 0 ? usable : C.JobPrio.ToList();
+            _jobPoolCacheStamp = now;
+            return _jobPoolCache;
+        }
+
+        private static bool GoldDeprioritisingHardMissions() =>
+            Mission_Settings.Mode == ModeSelect.MissionGoldMode && C.Gold_HardMissionsLast;
+
+        /// <summary>
+        /// 0 = still worth doing now, 1 = already completed without a gold, so save it for last.
+        /// Applies to every mission type. Weather/timed/critical missions are on the game's clock, but they
+        /// rotate - passing on a hard one means taking a different one now, not losing the type - and those
+        /// are exactly the missions that can eat a whole run without ever producing a gold.
+        /// </summary>
+        private static int GoldDifficultyTier(uint missionId)
+        {
+            if (!GoldDeprioritisingHardMissions())
+                return 0;
+
+            if (MissionCompletedWithoutGold(missionId))
+                return 1;
+
+            // An already-gold mission is only in the pool as a stepping stone to a later chain step, and
+            // starting that chain means running every step again - so it is exactly as hard as the step it
+            // is being run for.
+            if (MissionGolded(missionId))
+            {
+                var target = NextUngoldedChainStep(missionId);
+                return target != 0 && MissionCompletedWithoutGold(target) ? 1 : 0;
+            }
+
+            return 0;
+        }
+
+        // - - - Sequence chains - - - //
+
+        /// <summary>The first step after this one that still needs a gold, or 0 if the chain is done.</summary>
+        private static uint NextUngoldedChainStep(uint missionId)
+        {
+            if (!CosmicHelper.SheetMissionDict.TryGetValue(missionId, out var mission))
+                return 0;
+
+            // SequenceMissions_Next is built nearest-first, so this walks the chain in running order.
+            foreach (var next in mission.SequenceMissions_Next)
+            {
+                if (!MissionGolded(next))
+                    return next;
+            }
+
+            return 0;
+        }
+
+        /// <summary>Whether this step, or something further down its chain, still needs a gold.</summary>
+        private static bool SequenceChainWanted(uint missionId) =>
+            !MissionGolded(missionId) || NextUngoldedChainStep(missionId) != 0;
+
+        /// <summary>
+        /// A chain step that is ready to run right now: it has earlier steps, every one of them is gold, and
+        /// the chain still has a gold left in it. The game only offers such a step because we just cleared
+        /// the one before it, and it goes away again the moment we take something else - so these are picked
+        /// ahead of the configured priorities. A chain sitting on a step we could not gold is not carried on
+        /// with; it goes back through normal selection instead.
+        /// </summary>
+        private static bool SequenceChainReady(uint missionId)
+        {
+            if (!CosmicHelper.SheetMissionDict.TryGetValue(missionId, out var mission))
+                return false;
+            if (mission.SequenceMissions_Previous.Count == 0)
+                return false;
+            if (!mission.SequenceMissions_Previous.All(previous => MissionGolded(previous)))
+                return false;
+
+            return SequenceChainWanted(missionId);
+        }
+
+        /// <summary>
+        /// A chain step the run we just finished unlocked. Only these are taken out of priority order: a
+        /// follow-up that has been sitting on the board on its own gets no such pass, or a chain we can
+        /// never gold would be retried every time it came round.
+        /// </summary>
+        private static bool IsLiveSequenceFollowUp(uint missionId)
+        {
+            var finished = Task_TurninMission.PreviousMissionId;
+            if (finished == 0 || finished == missionId)
+                return false;
+
+            if (!CosmicHelper.SheetMissionDict.TryGetValue(missionId, out var mission))
+                return false;
+
+            return mission.SequenceMissions_Previous.Contains(finished) && SequenceChainReady(missionId);
+        }
+
+        /// <summary>
+        /// Whether the mission we just finished should be handing us a follow-up step. Used to hold off on
+        /// side activities and to give the board a moment to offer it.
+        /// </summary>
+        internal static bool SequenceContinuationPending()
+        {
+            var finished = Task_TurninMission.PreviousMissionId;
+            if (finished == 0)
+                return false;
+            if (!CosmicHelper.SheetMissionDict.TryGetValue(finished, out var mission))
+                return false;
+
+            // The chain is only worth carrying on with while the step underneath it came out gold.
+            if (!MissionGolded(finished))
+                return false;
+
+            var next = mission.SequenceMissions_Next.FirstOrDefault();
+            if (next == 0 || !CosmicHelper.SheetMissionDict.TryGetValue(next, out var nextMission))
+                return false;
+
+            return LevelRequirementMet(nextMission) && SequenceChainWanted(next);
+        }
+
+        /// <summary>Suffix for pick logs, so a chain step is recognisable in the log even when it was picked
+        /// by the normal priority order rather than by the chain pass.</summary>
+        private static string SequenceNote(uint missionId)
+        {
+            if (!CosmicHelper.SheetMissionDict.TryGetValue(missionId, out var mission) || !mission.IsSequence)
+                return string.Empty;
+
+            var step = mission.SequenceMissions_Previous.Count + 1;
+            var total = step + mission.SequenceMissions_Next.Count;
+            return $" | sequence step {step}/{total}";
+        }
+
+        /// <summary>
+        /// One line per finished sequence mission saying which way the chain went: carried on, dropped
+        /// because the step wasn't gold, or done. Silent for everything that isn't part of a chain.
+        /// </summary>
+        private static void LogSequenceChainState(uint finished, string tag)
+        {
+            if (finished == 0 || !CosmicHelper.SheetMissionDict.TryGetValue(finished, out var mission))
+                return;
+
+            var next = mission.SequenceMissions_Next.FirstOrDefault();
+            if (next == 0)
+                return;
+
+            if (!MissionGolded(finished))
+            {
+                IceLogging.Info($"Sequence chain dropped: [{finished}] did not come out gold, so its follow-up [{next}] " +
+                    "goes back through normal mission selection.", tag);
+                return;
+            }
+
+            if (!SequenceChainWanted(next))
+            {
+                IceLogging.Info($"Sequence chain done: nothing after [{finished}] still needs a gold.", tag);
+                return;
+            }
+
+            IceLogging.Info($"Sequence chain live: [{finished}] is gold, follow-up [{next}] is next in line.", tag);
+        }
+
+        private static uint _sequenceWaitMission = 0;
+        private static int _sequenceWaitAttempts = 0;
+
+        /// <summary>
+        /// The board does not always list a sequence follow-up the instant its prerequisite is turned in.
+        /// Give it a few seconds before the picker moves on, otherwise a reroll throws the chain away.
+        /// </summary>
+        private static bool? WaitForSequenceFollowUp()
+        {
+            string tag = "[Check Missions: Sequence Follow-up]";
+
+            var finished = Task_TurninMission.PreviousMissionId;
+            if (finished != _sequenceWaitMission)
+            {
+                _sequenceWaitMission = finished;
+                _sequenceWaitAttempts = 0;
+                LogSequenceChainState(finished, tag);
+            }
+
+            if (CosmicHelper.CurrentLunarMission != 0 || !SequenceContinuationPending())
+                return true;
+
+            var next = CosmicHelper.SheetMissionDict[finished].SequenceMissions_Next.First();
+            var job = CosmicHelper.SheetMissionDict[next].Jobs.First();
+
+            // Chain steps are normally provisional, but check the whole board so a basic-tab step counts too.
+            if (CorrectJobTab(job, 0) && CosmicHandler.All_AvailableMissions().Contains(next))
+                return true;
+
+            if (_sequenceWaitAttempts >= 5)
+            {
+                IceLogging.Info($"Sequence follow-up [{next}] never showed up on the board after finishing [{finished}]. " +
+                    "Carrying on with normal mission selection.", tag);
+                return true;
+            }
+
+            if (EzThrottler.Throttle("Waiting on sequence follow-up", 500))
+            {
+                _sequenceWaitAttempts++;
+                IceLogging.Verbose($"Waiting for sequence follow-up [{next}] to appear on the board " +
+                    $"(attempt {_sequenceWaitAttempts})", tag);
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Tiebreaker inside a difficulty tier: the more non-gold completions a mission has racked up, the
+        /// further back it goes.
+        /// </summary>
+        private static int GoldAttemptPenalty(uint missionId)
+        {
+            if (!GoldDeprioritisingHardMissions())
+                return 0;
+
+            if (!C.MissionConfig.TryGetValue(missionId, out var config))
+                return 0;
+
+            return Math.Max(0, config.TotalCompletions - config.GoldCompletions);
+        }
+
+        /// <summary>
+        /// Golded missions that later steps of an ungolded sequence chain still depend on. Rebuilt with the
+        /// mission library so the pick path can check membership cheaply.
+        /// </summary>
+        private static readonly HashSet<uint> GoldSequencePrereqs = new();
+
+        private static void RefreshGoldSequencePrereqs()
+        {
+            GoldSequencePrereqs.Clear();
+
+            foreach (var (missionId, mission) in CosmicHelper.SheetMissionDict)
+            {
+                if (mission.TerritoryId != Player.Territory.RowId)
+                    continue;
+                if (mission.SequenceMissions_Previous.Count == 0)
+                    continue;
+                if (MissionGolded(missionId) || !GoldJobAllowed(mission) || !LevelRequirementMet(mission))
+                    continue;
+
+                foreach (var prereq in mission.SequenceMissions_Previous)
+                    GoldSequencePrereqs.Add(prereq);
+            }
+        }
+
+        /// <summary>
+        /// Whether any class still has a standard mission that we've never completed below gold. Those are
+        /// the ones worth rerolling for; once they're gone, the previously-failed missions are all that's
+        /// left to grind. Deliberately standard-only: a rare weather mission we've never attempted must not
+        /// hold the gate open forever, since no amount of rerolling makes it appear.
+        /// </summary>
+        private static bool GoldEasyMissionsRemain() =>
+            ActiveJobPool().Any(job => GoldRemainingBasicMissions(job).Any(id => GoldDifficultyTier(id) == 0));
+
+        /// <summary>Standard-tab missions on this moon that the given job still needs a gold on.</summary>
+        private static List<uint> GoldRemainingBasicMissions(uint job)
+        {
+            return CosmicHelper.SheetMissionDict
+                .Where(x => x.Value.TerritoryId == Player.Territory.RowId)
+                .Where(x => !x.Value.IsProvisional && !x.Value.IsCritical && !x.Value.IsMaster)
+                .Where(x => x.Value.Jobs.Contains(job))
+                .Where(x => LevelRequirementMet(x.Value))
+                .Where(x => !MissionGolded(x.Key))
+                .Select(x => x.Key)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Nothing was grabbable, so we're about to reroll the board. Reroll on the highest priority job that
+        /// still has missions to gold - preferring one with missions we haven't already failed to gold -
+        /// instead of burning rerolls on a class that is already finished.
+        /// </summary>
+        private static bool? AlignGoldRerollJob()
+        {
+            string tag = "[Check Missions: Gold Reroll Job]";
+
+            if (Mission_Settings.Mode != ModeSelect.MissionGoldMode)
+                return true;
+
+            // A mission was already grabbed earlier in the queue; nothing to reroll for.
+            if (CosmicHelper.CurrentLunarMission != 0)
+                return true;
+
+            uint bestJob = 0;
+            int bestTier = int.MaxValue, bestJobPrio = int.MaxValue;
+
+            foreach (var job in ActiveJobPool())
+            {
+                var remaining = GoldRemainingBasicMissions(job);
+                if (remaining.Count == 0)
+                    continue;
+
+                int tier = remaining.Min(id => GoldDifficultyTier(id));
+                int jobPrio = C.JobPrio.IndexOf(job);
+
+                if (tier < bestTier || (tier == bestTier && jobPrio < bestJobPrio))
+                {
+                    bestTier = tier;
+                    bestJobPrio = jobPrio;
+                    bestJob = job;
+                }
+            }
+
+            if (bestJob == 0)
+                return true;
+
+            if (bestJob != Mission_Settings.SelectedJob)
+            {
+                IceLogging.Info($"Rerolling on job [{bestJob}] instead of [{Mission_Settings.SelectedJob}]: " +
+                    $"it still has missions that need a gold{(bestTier > 0 ? " (all of them previously completed without one)" : string.Empty)}.", tag);
+                Mission_Settings.SelectedJob = bestJob;
+            }
+
+            CorrectJobTab(Mission_Settings.SelectedJob, 0);
+            return true;
+        }
+
+        /// <summary>
+        /// Rank counts backing the reroll decisions. Gold Completion fills the library from every class, but
+        /// a reroll only ever happens on the board of one job, so the count is narrowed to that job.
+        /// </summary>
+        private static int LibraryRankCount(MissionKind rank)
+        {
+            var missions = MissionLibrary[rank];
+
+            if (Mission_Settings.Mode != ModeSelect.MissionGoldMode)
+                return missions.Count;
+
+            var job = Mission_Settings.SelectedJob;
+            return missions.Count(id => CosmicHelper.SheetMissionDict.TryGetValue(id, out var m) && m.Jobs.Contains(job));
         }
 
         // functions that are used across things

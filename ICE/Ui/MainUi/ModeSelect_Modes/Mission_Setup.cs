@@ -303,6 +303,19 @@ namespace ICE.Ui.MainUi.ModeSelect_Modes
                     }
 
                     ImGui.Separator();
+                    bool goldHardLast = C.Gold_HardMissionsLast;
+                    if (ImGui.Checkbox("Gold Mode: Leave Hard Missions For Last", ref goldHardLast))
+                    {
+                        C.Gold_HardMissionsLast = goldHardLast;
+                        C.Save();
+                    }
+                    ImGuiEx.HelpMarker("Gold Completion Mode only: missions you have already completed without a gold rating\n" +
+                        "are the hardest ones to gold, so they get pushed behind every other mission that still needs one.\n" +
+                        "Applies to weather/timed/sequence and red alerts too - those rotate, so passing on a hard one\n" +
+                        "just means doing a different one now.\n" +
+                        "Turn this off to treat every ungolded mission the same.");
+
+                    ImGui.Separator();
                     bool relic_AllowRedAlert = C.Relic_IncludeCriticals;
                     if (ImGui.Checkbox("Relic Mode: Allow Red Alerts", ref relic_AllowRedAlert))
                     {

@@ -390,17 +390,31 @@ namespace ICE.Scheduler.Tasks
             if (!C.StopOnceStandardMissionsGolded || !PlayerHelper.IsInCosmicZone())
                 return null;
 
-            var jobId = Mission_Settings.SelectedJob;
             var territory = Player.Territory.RowId;
-            var (golded, total) = CosmicHelper.CountStandardMissionGold(jobId, territory);
+
+            // Gold Completion grinds every class, so it only stops once every class in the job priority is
+            // done. Every other mode is pinned to the selected job.
+            var jobs = Mission_Settings.Mode == ModeSelect.MissionGoldMode && C.SelectedMode != ModeSelect.AgendaMode
+                ? C.JobPrio.ToArray()
+                : new[] { Mission_Settings.SelectedJob };
+
+            int golded = 0, total = 0;
+            foreach (var job in jobs)
+            {
+                var (jobGolded, jobTotal) = CosmicHelper.CountStandardMissionGold(job, territory);
+                golded += jobGolded;
+                total += jobTotal;
+            }
+
             if (total == 0 || golded < total)
                 return null;
 
-            var jobName = CosmicHelper.ClassInfoDict.TryGetValue(jobId, out var jobClass) ? jobClass.JobName : jobId.ToString();
+            var jobNames = string.Join(", ", jobs.Select(job =>
+                CosmicHelper.ClassInfoDict.TryGetValue(job, out var jobClass) ? jobClass.JobName : job.ToString()));
             var moonName = CosmicMoonRegistry.GetDisplayName(territory);
             IceLogging.ChatInfo(
                 $"Stop When Standard Missions Golded is enabled.\n" +
-                $"All {total} standard missions are gold for {jobName} on {moonName} ({golded}/{total}).",
+                $"All {total} standard missions are gold for {jobNames} on {moonName} ({golded}/{total}).",
                 "[I.C.E.]");
             SchedulerMain.State = IceState.Idle;
             P.TaskManager.Tasks.Clear();
@@ -463,7 +477,9 @@ namespace ICE.Scheduler.Tasks
                 var sheetInfo = CosmicHelper.SheetMissionDict.Where(x => x.Value.Jobs.Contains(job))
                     .Where(x => x.Value.TerritoryId == Player.Territory.RowId);
 
-                var totalCompleted = sheetInfo.Where(x => x.Value.CompletionStatus is CosmicHelper.Status.Completed).ToList().Count();
+                // "All Missions Golded" means gold, not merely completed - a mission that has been finished
+                // at bronze/silver still needs another run.
+                var totalGolded = sheetInfo.Where(x => x.Value.CompletionStatus is CosmicHelper.Status.Gold).ToList().Count();
                 var totalMissions = sheetInfo.Count();
 
                 var goal = entry.SelectedOption;
@@ -481,7 +497,7 @@ namespace ICE.Scheduler.Tasks
                     PlaylistOptions.ClassLevel => level >= entry.ClassLevel,
                     PlaylistOptions.ClassScore => classScore >= entry.ClassScore,
                     PlaylistOptions.ToolMaxExp => MaxLevelExp,
-                    PlaylistOptions.GoldClassMissions => totalCompleted == totalMissions,
+                    PlaylistOptions.GoldClassMissions => totalMissions > 0 && totalGolded == totalMissions,
                     PlaylistOptions.MasteryScore => masteryScore >= entry.ClassScore,
                     _ => true
                 };
@@ -497,7 +513,8 @@ namespace ICE.Scheduler.Tasks
                         PlaylistOptions.DronebitAmount => $"{dronebitAmount}/{entry.DronebitAmount}",
                         PlaylistOptions.ClassLevel => $"{level}/{entry.ClassLevel}",
                         PlaylistOptions.ClassScore => $"{classScore}/{entry.ClassScore}",
-                        PlaylistOptions.ToolMaxExp or PlaylistOptions.GoldClassMissions => $"{achieved}",
+                        PlaylistOptions.ToolMaxExp => $"{achieved}",
+                        PlaylistOptions.GoldClassMissions => $"{totalGolded}/{totalMissions}",
                         PlaylistOptions.MasteryScore => $"{masteryScore}/{entry.ClassScore}",
                         _ => "?"
                     };
@@ -648,6 +665,19 @@ namespace ICE.Scheduler.Tasks
             {
                 ProcessRetainers = RetainerHelper.AnyVentureComplete();
                 IceLogging.Verbose($"Process retainers? {ProcessRetainers}", tag);
+            }
+
+            // A sequence follow-up is sitting on the board and goes away if we wander off, so the optional
+            // errands wait a mission. Vendor repairs still go through - the step can't be run on broken gear.
+            if (Task_CheckMissions.SequenceContinuationPending()
+                && (BuyDrones || GambaWheel || BuyItems || TurninRelic || ProcessRetainers))
+            {
+                IceLogging.Info("Holding off on hub errands: a sequence follow-up mission is waiting to be picked up.", tag);
+                BuyDrones = false;
+                GambaWheel = false;
+                BuyItems = false;
+                TurninRelic = false;
+                ProcessRetainers = false;
             }
 
             if (BuyDrones || GambaWheel || BuyItems || RepairVendor || TurninRelic || ProcessRetainers)

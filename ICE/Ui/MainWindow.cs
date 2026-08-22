@@ -172,6 +172,10 @@ namespace ICE.Ui
                 ModeSelect.MissionGoldMode =>
                     "Gold Completion Mode\n" +
                     "-> Will automatically pick all the missions that you do not have currently gold, AND ONLY THOSE MISSIONS.\n" +
+                    "-> Covers every class you can play, not just the one you're on: it swaps jobs to whatever still needs a gold, in your configured job priority order\n" +
+                    "-> Mission types are picked in your configured priority (Settings -> Mission Priority), same as Standard\n" +
+                    "-> Missions you have already completed without a gold are saved for last, since those are the hard ones (toggle in Mission Settings)\n" +
+                    "-> That includes weather/timed/sequence and red alerts: they rotate, so a hard one gets passed over in favour of whatever else is up\n" +
                     "-> If it is apart of a sequence chain, it will grab the mission that are needed previously to help complete it, and the missions post if necessary\n" +
                     "-> If it runs out of missions to reroll, it will just continually swap tabs until the mission is available (via provisional or critical)\n" +
                     "**This will respect the want to grind off class provisionals, and criticals if you have those enabled",
