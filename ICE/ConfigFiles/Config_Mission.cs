@@ -48,6 +48,12 @@ public partial class Config
     public Dictionary<uint, MissionSettings> MissionConfig { get; set; } = new();
     public Dictionary<string, List<uint>> Mission_Playlist { get; set; } = new();
 
+    /// <summary>
+    /// Gold Completion mode: missions already completed at a non-gold rating are the hardest to gold,
+    /// so they get pushed behind everything else that still needs a gold.
+    /// </summary>
+    public bool Gold_HardMissionsLast { get; set; } = true;
+
     public bool GrindAllProvisionals { get; set; } = true;
     public bool GrindOffClassRedAlert { get; set; } = false;
     public bool Relic_IncludeCriticals { get; set; } = true;

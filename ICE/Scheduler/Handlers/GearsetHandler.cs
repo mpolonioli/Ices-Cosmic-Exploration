@@ -7,6 +7,29 @@ namespace ICE.Scheduler.Handlers
 {
     internal static class GearsetHandler // Borrowed from Artisan
     {
+        /// <summary>
+        /// Whether we could actually swap to this job. Without a gearset TaskClassChange can never complete,
+        /// so the job-rotating modes skip those classes instead of stalling on them.
+        /// </summary>
+        internal unsafe static bool HasGearset(Job job)
+        {
+            if (job == Player.Job)
+                return true;
+
+            var gearsets = RaptureGearsetModule.Instance();
+            if (gearsets == null)
+                return false;
+
+            foreach (ref var gs in gearsets->Entries)
+            {
+                if (!gearsets->IsValidGearset(gs.Id))
+                    continue;
+                if ((Job)gs.ClassJob == job)
+                    return true;
+            }
+
+            return false;
+        }
         internal unsafe static void TaskClassChange(Job job)
         {
             if (job == Player.Job || !EzThrottler.Throttle("Gearset", 250) || Player.IsBusy)

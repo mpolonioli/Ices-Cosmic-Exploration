@@ -171,6 +171,7 @@ namespace ICE.Ui.MainUi.Settings
             }
             ImGuiEx.HelpMarker(
                 "Stops when every non-provisional, non-critical mission for your selected job on the current moon is gold.\n" +
+                "Gold Completion Mode grinds every class, so there it waits for all jobs in your job priority.\n" +
                 "Timed, weather, sequence, and red alert missions are not counted.");
 
             #endregion
