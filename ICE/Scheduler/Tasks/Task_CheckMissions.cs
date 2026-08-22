@@ -775,7 +775,10 @@ namespace ICE.Scheduler.Tasks
 
                 var job = Mission_Settings.SelectedJob;
 
-                if (CorrectJobTab(job))
+                // Tool Mastery missions live on their own category tab (3); everything else is Basic (0).
+                byte categoryTab = type is MissionTypes.ToolMastery ? CosmicHandler.ToolMasteryTab : (byte)0;
+
+                if (CorrectJobTab(job, categoryTab))
                 {
                     if (mode == ModeSelect.LevelMode)
                     {
@@ -1355,6 +1358,11 @@ namespace ICE.Scheduler.Tasks
                     viableMissions.Add(missionId);
 
                     var sheetInfo = CosmicHelper.SheetMissionDict[missionId];
+
+                    // Tool Mastery missions are only readable and grabbable from their own tab (3).
+                    if (sheetInfo.IsMaster)
+                        CorrectJobTab(sheetInfo.Jobs.First(), CosmicHandler.ToolMasteryTab);
+
                     var allmissions = CosmicHandler.All_AvailableMissions();
                     if (allmissions.Contains(missionId))
                     {
