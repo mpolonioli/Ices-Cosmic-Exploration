@@ -1060,6 +1060,8 @@ public sealed partial class ICE
             Artisan_MigrateNew();
         }
 
+        PlanetTravel_DropDrivingway();
+
         if (C.Config_Versioning == 0)
         {
             foreach (var mission in C.MissionConfig)
@@ -1134,6 +1136,34 @@ public sealed partial class ICE
         }
         C.SaveDebounced();
     }
+    /// <summary>
+    /// Early builds of the cross-planet hop listed Drivingway alongside Cruisingway and then took whichever
+    /// was nearer. On Sinus Ardorum he stands in front of Cruisingway and sends you back to the standard
+    /// moon area rather than to another hub - so he's dropped from the name list, along with any hub cached
+    /// against him.
+    /// </summary>
+    private static void PlanetTravel_DropDrivingway()
+    {
+        const string dropped = "Drivingway";
+
+        var changed = C.Gold_TravelNpcNames.RemoveAll(name => string.Equals(name, dropped, StringComparison.OrdinalIgnoreCase)) > 0;
+
+        foreach (var territory in C.Gold_TravelNpcCache
+            .Where(entry => string.Equals(entry.Value.Name, dropped, StringComparison.OrdinalIgnoreCase))
+            .Select(entry => entry.Key)
+            .ToList())
+        {
+            C.Gold_TravelNpcCache.Remove(territory);
+            changed = true;
+        }
+
+        if (!changed)
+            return;
+
+        IceLogging.Info($"Dropped {dropped} from the planet travel NPCs - Cruisingway is the one that flies between moons.");
+        C.Save();
+    }
+
     public static void Artisan_MigrateNew()
     {
         if (C.Artisan_RaphaelForce)

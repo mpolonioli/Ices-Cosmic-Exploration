@@ -232,7 +232,7 @@ namespace ICE.Ui.MainUi.ModeSelect_Modes
                     {
                         if (ImGui.Button("Stop", new Vector2(150 * scale, 0)))
                         {
-                            SchedulerMain.DisablePlugin();
+                            SchedulerMain.StopByUser();
                         }
                     }
                 }
@@ -314,6 +314,89 @@ namespace ICE.Ui.MainUi.ModeSelect_Modes
                         "Applies to weather/timed/sequence and red alerts too - those rotate, so passing on a hard one\n" +
                         "just means doing a different one now.\n" +
                         "Turn this off to treat every ungolded mission the same.");
+
+                    bool goldTravel = C.Gold_CrossPlanetTravel;
+                    if (ImGui.Checkbox("Gold Mode: Travel Between Planets", ref goldTravel))
+                    {
+                        C.Gold_CrossPlanetTravel = goldTravel;
+                        C.Save();
+                    }
+                    ImGuiEx.HelpMarker("Gold Completion Mode only: when the only missions left to gold on this moon are\n" +
+                        "weather / timed / red alert ones and none of them are up, fly to a hub that has one -\n" +
+                        "instead of sitting on the mission board waiting for this moon to roll one.\n" +
+                        "Weather forecasts and Eorzea time are readable for every moon, so the hop is planned before leaving.\n" +
+                        "Red alerts can't be seen from another moon, so a hub whose only work left is a red alert\n" +
+                        "is treated as \"something in about 20 minutes\" when comparing hubs.");
+
+                    using (ImRaii.Disabled(!goldTravel))
+                    {
+                        ImGui.Indent();
+                        var travelMoons = C.Gold_TravelMoons.Count == 0
+                            ? CosmicMoonRegistry.TerritoryIds.ToList()
+                            : C.Gold_TravelMoons.ToList();
+
+                        for (int i = 0; i < CosmicMoonRegistry.All.Length; i++)
+                        {
+                            var moon = CosmicMoonRegistry.All[i];
+                            bool allowed = travelMoons.Contains(moon.TerritoryId);
+                            if (i > 0)
+                                ImGui.SameLine();
+
+                            if (ImGui.Checkbox($"{moon.DisplayName}##GoldTravelMoon", ref allowed))
+                            {
+                                if (allowed)
+                                    travelMoons.Add(moon.TerritoryId);
+                                else
+                                    travelMoons.Remove(moon.TerritoryId);
+
+                                // No destinations left means there is nothing to travel for - an empty list
+                                // is the "every moon" default, so turn the feature off instead.
+                                if (travelMoons.Count == 0)
+                                {
+                                    C.Gold_TravelMoons = new();
+                                    C.Gold_CrossPlanetTravel = false;
+                                }
+                                else
+                                {
+                                    C.Gold_TravelMoons = travelMoons;
+                                }
+
+                                C.Save();
+                            }
+                        }
+
+                        int minWindow = C.Gold_TravelMinWindowMinutes;
+                        ImGui.SetNextItemWidth(150 * scale);
+                        if (ImGui.SliderInt("Window has to be open this long (min)##GoldTravelWindow", ref minWindow, 1, 20))
+                        {
+                            C.Gold_TravelMinWindowMinutes = minWindow;
+                            C.Save();
+                        }
+                        ImGuiEx.HelpMarker("A weather / timed window that is about to close isn't worth the flight.");
+
+                        int maxWait = C.Gold_TravelMaxWaitMinutes;
+                        ImGui.SetNextItemWidth(150 * scale);
+                        if (ImGui.SliderInt("Fly for a window starting within (min)##GoldTravelWait", ref maxWait, 5, 120))
+                        {
+                            C.Gold_TravelMaxWaitMinutes = maxWait;
+                            C.Save();
+                        }
+                        ImGuiEx.HelpMarker("Nothing anywhere inside this window means staying put instead of flying over to wait.");
+
+                        int rotate = C.Gold_TravelRotateMinutes;
+                        ImGui.SetNextItemWidth(150 * scale);
+                        if (ImGui.SliderInt("Rotate hubs after (min, 0 = off)##GoldTravelRotate", ref rotate, 0, 60))
+                        {
+                            C.Gold_TravelRotateMinutes = rotate;
+                            C.Save();
+                        }
+                        ImGuiEx.HelpMarker("When the only missions left anywhere are red alerts, no moon looks better than\n" +
+                            "any other from a distance - and sitting on one hub only ever catches that hub's alerts.\n" +
+                            "After this long on a hub with nothing to run and no alert brewing, ICE moves to the hub\n" +
+                            "it has left alone the longest. It stays put while a red alert is incoming or in progress,\n" +
+                            "or when a weather / timed window here opens within this same span.");
+                        ImGui.Unindent();
+                    }
 
                     ImGui.Separator();
                     bool relic_AllowRedAlert = C.Relic_IncludeCriticals;

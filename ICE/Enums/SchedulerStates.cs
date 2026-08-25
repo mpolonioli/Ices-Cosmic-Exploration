@@ -12,6 +12,7 @@ namespace ICE.Enums
         ScoreCheck = 6,
         ManualMode = 7,
         Waiting = 8,
+        PlanetTravel = 9,
 
         HubReturn = 10,
         Repair = 11,

@@ -22,7 +22,9 @@ internal static class NpcData // Renamed the class to avoid conflict
         Gamba,
         Drone,
         RedAlert,
-        SummonerBell
+        SummonerBell,
+        /// <summary>Hub NPC that flies you to another moon (Cruisingway). Resolved live, cached in config.</summary>
+        PlanetTravel
     }
 
     public class NPCInfo // Keep this class for the dictionary
@@ -79,6 +81,13 @@ internal static class NpcData // Renamed the class to avoid conflict
                 Name = "Summoning Bell",
                 Location_Npc = new Vector3(10.53f, 1.61f, 17.29f),
                 Location_Circle = new Vector3(10.53f, 1.61f, 17.29f),
+            },
+            [NpcType.PlanetTravel] = new NPCInfo // Travel between moons - out on the airship landing pad
+            {
+                NpcId = 1052624,
+                Name = "Cruisingway",
+                Location_Npc = new Vector3(-42.01f, 11.86f, -95.75f),
+                Location_Circle = new Vector3(-42.01f, 11.86f, -95.75f),
             }
         },
         [1291] = new Dictionary<NpcType, NPCInfo> // phaenna
@@ -228,6 +237,13 @@ internal static class NpcData // Renamed the class to avoid conflict
                 Name = "Summoning Bell",
                 Location_Npc = new Vector3(312.75f, 205.64f, 371.76f),
                 Location_Circle = new Vector3(312.75f, 205.64f, 371.76f),
+            },
+            [NpcType.PlanetTravel] = new NPCInfo // Travel between moons
+            {
+                NpcId = 1056818,
+                Name = "Cruisingway",
+                Location_Npc = new Vector3(366.11f, 204.14f, 395.62f),
+                Location_Circle = new Vector3(366.11f, 204.14f, 395.62f),
             }
         },
     };

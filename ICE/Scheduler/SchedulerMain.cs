@@ -16,6 +16,16 @@ namespace ICE.Scheduler
             GenericManager.StorePandoraStates();
             return true;
         }
+        /// <summary>
+        /// The player pressed stop. Distinct from <see cref="DisablePlugin"/>, which also fires on its own
+        /// over a loading screen - a cross-planet hop has to survive that one but not this one.
+        /// </summary>
+        internal static bool StopByUser()
+        {
+            Task_PlanetTravel.Cancel();
+            return DisablePlugin();
+        }
+
         internal static bool DisablePlugin()
         {
             IceLogging.Debug("Stopping the plugin state", "[Schedular - Disable Plugin]");
@@ -51,6 +61,7 @@ namespace ICE.Scheduler
                     case HubReturn: Task_HubActivities.Enqueue(); break;
                     case GrabMission: Task_CheckMissions.Enqueue(); break;
                     case Waiting: Task_CheckMissions.EnqueueWaitRecheck(); break;
+                    case PlanetTravel: Task_PlanetTravel.Enqueue(); break;
                     case AbandonMission: Task_AbandonMission.Enqueue(); break;
                     case ExecutingMission: Task_ExecuteMission.Enqueue(); break;
                     case ScoreCheck: Task_CheckScore.Enqueue(); break;

@@ -94,6 +94,14 @@ namespace ICE.Scheduler.Tasks
 
         private static void EnterWaitForSpecialMissions(string tag)
         {
+            // Only weather/timed/red alert missions left here and none of them are up: another hub may have
+            // one open right now, which beats idling on this mission board until this moon rolls one.
+            if (Task_PlanetTravel.TryStartTravel(tag))
+            {
+                P.TaskManager.Tasks.Clear();
+                return;
+            }
+
             if (SchedulerMain.State != IceState.Waiting)
             {
                 IceLogging.Info("Gold completion grind: waiting for a timed, weather, or critical mission to appear on the board.", tag);
@@ -326,6 +334,14 @@ namespace ICE.Scheduler.Tasks
                 {
                     IceLogging.Verbose("We currently have no viable missions... which is odd. Please make sure you have some enabled, or report back if this is incorrect\n" +
                         $"Config Mode: {C.SelectedMode} | Mode going into this: {Mission_Settings.Mode}", tag);
+                }
+
+                // Gold Completion: this moon has nothing left we can run, but another hub can still have
+                // missions that need a gold - fly there instead of stopping the run.
+                if (modeSelected == ModeSelect.MissionGoldMode && Task_PlanetTravel.TryStartTravel(tag))
+                {
+                    P.TaskManager.Tasks.Clear();
+                    return true;
                 }
 
                 SchedulerMain.State = IceState.Idle;
@@ -1759,6 +1775,14 @@ namespace ICE.Scheduler.Tasks
         }
 
         // - - - Gold Completion helpers - - - //
+
+        /// <summary>
+        /// The Gold Completion filter, applied to a mission on <b>any</b> moon: still needs a gold, one of its
+        /// jobs is in play, and we meet the level. The cross-planet check runs the same filter off-world, so
+        /// both sides agree on what counts as work left.
+        /// </summary>
+        internal static bool GoldMissionWanted(uint missionId, CosmicHelper.CosmicInfo mission) =>
+            !MissionGolded(missionId) && GoldJobAllowed(mission) && LevelRequirementMet(mission);
 
         /// <summary>
         /// Gold Completion works across every class in the configured job priority, so a mission counts as
