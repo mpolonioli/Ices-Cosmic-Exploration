@@ -137,7 +137,7 @@ namespace ICE.Ui
                 if (ImGuiEx.IconButton(FontAwesomeIcon.SearchLocation, "##DroneFinder", buttonSize))
                 {
                     if (droneActive)
-                        SchedulerMain.DisablePlugin();
+                        SchedulerMain.StopByUser();
                     else
                         SchedulerMain.State = IceState.ArtifactSearch;
                 }
@@ -170,7 +170,7 @@ namespace ICE.Ui
             if (ImGuiEx.IconButton(running ? FontAwesomeIcon.Stop : FontAwesomeIcon.Play, "##StartStop", buttonSize))
             {
                 if (running)
-                    SchedulerMain.DisablePlugin();
+                    SchedulerMain.StopByUser();
                 else
                     SchedulerMain.EnablePlugin();
             }

@@ -37,6 +37,10 @@ internal static unsafe class PlayerHandlers
         }
         */
 
+        // A cross-planet hop stops the plugin over the loading screen - pick the run back up on arrival.
+        if (Task_PlanetTravel.TryResumeAfterArrival())
+            return;
+
         if (C.MoonSprint 
             && PlayerHelper.IsInCosmicZone()
             && !PlayerHelper.HasStatusId(stellarSprintID) 

@@ -17,7 +17,7 @@ namespace ICE.Ui.MainUi.Settings
 
             if (ImGui.Button("Stop"))
             {
-                SchedulerMain.DisablePlugin();
+                SchedulerMain.StopByUser();
             }
 
             bool buyDrones = C.Cosmodrone_Buy;

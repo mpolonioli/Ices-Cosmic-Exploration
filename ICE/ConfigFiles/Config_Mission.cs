@@ -54,6 +54,77 @@ public partial class Config
     /// </summary>
     public bool Gold_HardMissionsLast { get; set; } = true;
 
+    /// <summary>
+    /// Gold Completion mode: when nothing on this moon can be worked on right now (only weather/timed/red
+    /// alert missions left to gold and none of them are up), fly to a hub where one is - instead of idling
+    /// on the mission board until the current moon rolls one.
+    /// </summary>
+    public bool Gold_CrossPlanetTravel { get; set; } = true;
+
+    /// <summary>Hubs the cross-planet hop is allowed to fly to. Empty = every moon in the registry.</summary>
+    public List<uint> Gold_TravelMoons { get; set; } = new();
+
+    /// <summary>Don't fly for a window that is about to close - it has to be open this long to be worth it.</summary>
+    public int Gold_TravelMinWindowMinutes { get; set; } = 5;
+
+    /// <summary>Nothing anywhere inside this many minutes means staying put rather than flying to wait.</summary>
+    public int Gold_TravelMaxWaitMinutes { get; set; } = 45;
+
+    /// <summary>
+    /// When every hub's remaining work is red alerts - which can't be seen from another moon - camping one
+    /// hub only ever catches that hub's alerts. After this many minutes somewhere with nothing running and
+    /// no alert brewing, move to the hub left alone the longest. 0 turns the rotation off.
+    /// </summary>
+    public int Gold_TravelRotateMinutes { get; set; } = 5;
+
+    /// <summary>
+    /// Red alerts can't be read from another moon, so a hub whose only remaining work is a red alert is
+    /// treated as "something should turn up in about this long" when weighing it against a hub we can see.
+    /// </summary>
+    public int Gold_RedAlertWaitMinutes { get; set; } = 20;
+
+    /// <summary>
+    /// Names of the hub NPC that flies you between moons - Cruisingway on every hub. Order is priority:
+    /// the first name that's standing nearby wins, however close the others are. On Sinus Ardorum
+    /// Drivingway stands in front of him and sends you back to the standard moon area instead, so he is
+    /// deliberately not in here; Cruisingway is further in, on the airship landing pad.
+    /// </summary>
+    public List<string> Gold_TravelNpcNames { get; set; } = new() { "Cruisingway" };
+
+    /// <summary>
+    /// Text that identifies the travel NPC's menu entry ("Travel to another cosmic exploration area.").
+    /// Matched case-insensitively as a substring, so non-English clients can drop their own wording in.
+    /// </summary>
+    public List<string> Gold_TravelMenuKeywords { get; set; } = new()
+    {
+        "cosmic exploration area",
+        "travel to another",
+    };
+
+    // Buttons in the cosmoliner's destination window, learned in-game by watching which one actually moves
+    // the carousel. Node ids repeat between components, so a button is addressed by its node list path
+    // ("6/2"). Empty = not learned yet; cleared automatically when a button stops working.
+    public string Gold_PlanetSelect_PrevButton { get; set; } = string.Empty;
+    public string Gold_PlanetSelect_NextButton { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Label of the confirm button in that window. It has a hidden twin for the "Specify Instance" layout,
+    /// so the button is picked by its wording rather than by where it sits.
+    /// </summary>
+    public List<string> Gold_PlanetSelect_ConfirmKeywords { get; set; } = new() { "blast off" };
+
+    /// <summary>Travel NPC positions learned in-game, per territory, so later hops path straight to them.</summary>
+    public Dictionary<uint, TravelNpcInfo> Gold_TravelNpcCache { get; set; } = new();
+
+    public class TravelNpcInfo
+    {
+        public uint NpcId { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public float X { get; set; }
+        public float Y { get; set; }
+        public float Z { get; set; }
+    }
+
     public bool GrindAllProvisionals { get; set; } = true;
     public bool GrindOffClassRedAlert { get; set; } = false;
     public bool Relic_IncludeCriticals { get; set; } = true;

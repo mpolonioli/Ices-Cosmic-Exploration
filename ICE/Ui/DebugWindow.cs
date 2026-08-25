@@ -62,6 +62,7 @@ internal class DebugWindow : Window
             ["Mission Info"] = () => Table_MissionInfo.Draw(),
             ["Gathering Missions"] = () => Table_GatheringInfo.Draw(),
             ["Special Missions"] = () => Table_TimeWeather.Draw(),
+            ["Planet Travel"] = () => Table_PlanetTravel.Draw(),
             ["Mission Text"] = () => Table_MissionText.Draw(),
             ["Recipes"] = () => Table_MoonRecipies.Draw(),
             ["Fish Info"] = () => Table_FishInfo.Draw(),
