@@ -116,15 +116,14 @@ namespace ICE.Scheduler.Tasks
                 return false;
             }
 
-            if (bestEta > C.Gold_TravelMaxWaitMinutes)
-            {
-                if (EzThrottler.Throttle("Planet travel: everything too far out", 60_000))
-                    IceLogging.Info($"Closest window anywhere else is {CosmicMoonRegistry.GetDisplayName(best.Moon.TerritoryId)} " +
-                        $"in {bestEta:N0} min, which is past the {C.Gold_TravelMaxWaitMinutes} min travel cutoff. Waiting here instead.", Tag);
-                return false;
-            }
+            // Nothing on the forecast is worth flying for: either the closest window anywhere is further out
+            // than we're willing to travel for, or this moon is already the best seat in the house. Both are
+            // cases where the rotation - which trades a known wait for red alert coverage we can't see from
+            // here - gets its say before we settle in for another wait.
+            var nothingCloseEnough = bestEta > C.Gold_TravelMaxWaitMinutes;
+            var hereIsAsGood = bestEta + TravelCostMinutes >= hereEta;
 
-            if (bestEta + TravelCostMinutes >= hereEta)
+            if (nothingCloseEnough || hereIsAsGood)
             {
                 // Every hub looks the same because the work left on all of them is red alerts, which can't
                 // be seen from off-world. Camping one moon then only ever catches that moon's alerts, so
@@ -136,9 +135,18 @@ namespace ICE.Scheduler.Tasks
                     return true;
                 }
 
-                if (EzThrottler.Throttle("Planet travel: here is better", 60_000))
+                if (nothingCloseEnough)
+                {
+                    if (EzThrottler.Throttle("Planet travel: everything too far out", 60_000))
+                        IceLogging.Info($"Closest window anywhere else is {CosmicMoonRegistry.GetDisplayName(best.Moon.TerritoryId)} " +
+                            $"in {bestEta:N0} min, which is past the {C.Gold_TravelMaxWaitMinutes} min travel cutoff. Waiting here instead.", Tag);
+                }
+                else if (EzThrottler.Throttle("Planet travel: here is better", 60_000))
+                {
                     IceLogging.Verbose($"Staying on {currentMoon.DisplayName}: next window here is ~{hereEta:N0} min out, " +
                         $"{best.Moon.DisplayName} is ~{bestEta:N0} min (+{TravelCostMinutes:N0} min of travel).", Tag);
+                }
+
                 return false;
             }
 
@@ -162,7 +170,8 @@ namespace ICE.Scheduler.Tasks
         /// <summary>
         /// The rotation: when the only work left anywhere is red alerts (or sequence chains that never show
         /// up), sitting still is a bet on one moon. After <see cref="Config.Gold_TravelRotateMinutes"/> on a
-        /// hub with nothing brewing, move to whichever hub has been left alone the longest.
+        /// hub with nothing on its board to gold, move to whichever hub with work left has been left alone
+        /// the longest.
         /// </summary>
         private static bool TryRotate(CosmicMoonDefinition currentMoon, MoonGoldStatus here, out MoonGoldStatus target)
         {
@@ -189,15 +198,9 @@ namespace ICE.Scheduler.Tasks
             if (here.NextMissionId != 0 && here.NextMinutes <= C.Gold_TravelRotateMinutes)
                 return false;
 
-            // The local red alert state is readable - if one is on its way here, this is the wrong moment
-            // to be standing at the cosmoliner.
-            if (RedAlertBrewing())
-            {
-                if (EzThrottler.Throttle("Planet travel: red alert here", 60_000))
-                    IceLogging.Info($"Red alert activity on {currentMoon.DisplayName} - staying for it.", Tag);
-                return false;
-            }
-
+            // A red alert being up on this moon is deliberately not a reason to stay. The alert that fires
+            // here need not be one we still owe a gold, and AnyMissionAvailableHere above already answers
+            // the only question that matters - is there something on this board we could be golding?
             var minutesHere = MinutesOnCurrentMoon();
             if (minutesHere < C.Gold_TravelRotateMinutes)
                 return false;
@@ -207,17 +210,21 @@ namespace ICE.Scheduler.Tasks
                 .Where(TravelAllowed)
                 .Select(moon => Evaluate(moon, WorthFlyingFor))
                 .Where(status => status.Remaining > 0)
-                // Longest since we last set foot there, so the rotation actually goes round.
-                .OrderBy(status => LastVisit(status.Moon.TerritoryId))
-                .ThenByDescending(status => status.Remaining)
                 .ToList();
 
             if (candidates.Count == 0)
                 return false;
 
-            target = candidates[0];
-            IceLogging.Info($"{minutesHere:N0} min on {currentMoon.DisplayName} with nothing to run and no red alert " +
-                $"brewing - rotating to {target.Moon.DisplayName}.", Tag);
+            // Any mission still owed a gold is reason enough to go and sit there - what kind it is doesn't
+            // come into it. Nothing is runnable here, so any hub with work left beats standing still.
+            target = candidates
+                // Longest since we last set foot there, so the rotation actually goes round.
+                .OrderBy(status => LastVisit(status.Moon.TerritoryId))
+                .ThenByDescending(status => status.Remaining)
+                .First();
+
+            IceLogging.Info($"{minutesHere:N0} min on {currentMoon.DisplayName} with nothing on the board to gold - " +
+                $"rotating to {target.Moon.DisplayName} ({target.Remaining} mission(s) left to gold there).", Tag);
             return true;
         }
 
